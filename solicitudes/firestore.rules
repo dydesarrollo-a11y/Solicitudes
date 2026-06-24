@@ -1,0 +1,178 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────
+// Reglas de seguridad Firestore — App "Solicitudes" (Blender)
+//
+// Principio: el cliente NUNCA realiza escrituras críticas.
+// Crear ticket, mover columnas, asignar roles, confirmar entrega y
+// cierre forzado pasan SIEMPRE por Cloud Functions (Admin SDK, que
+// ignora estas reglas). Aquí sólo permitimos:
+//   - Lecturas filtradas por rol.
+//   - Escrituras de bajo riesgo controladas (comentarios, marcar
+//     notificaciones como leídas, perfil propio limitado).
+// ─────────────────────────────────────────────────────────────
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers de claims ──────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function emailOk() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email.matches('.*@blendergroup[.]com$');
+    }
+    function role() {
+      return request.auth.token.role;
+    }
+    function status() {
+      return request.auth.token.status;
+    }
+    function isActive() {
+      return emailOk() && status() == 'active';
+    }
+    function hasRole(r) {
+      return isActive() && role() == r;
+    }
+    function isAdminLike() {
+      return isActive() && (role() == 'admin' || role() == 'superadmin');
+    }
+    function isSuperAdmin() {
+      return hasRole('superadmin');
+    }
+    function isAuditor() {
+      return hasRole('auditor');
+    }
+
+    // ── users ──────────────────────────────────────────────
+    // Lectura: el propio usuario, o admins/superadmin/auditor (directorio).
+    // Escritura de rol/estado: SOLO backend (assignRole). Bloqueada aquí.
+    match /users/{uid} {
+      allow read: if isActive() &&
+        (request.auth.uid == uid || isAdminLike() || isAuditor());
+
+      // El usuario puede actualizar SOLO campos cosméticos propios.
+      allow update: if isSignedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['displayName', 'photoURL', 'lastLoginAt']);
+
+      // create/delete y cambios de rol/estado → backend únicamente.
+      allow create, delete: if false;
+    }
+
+    // ── tickets ────────────────────────────────────────────
+    function ticket() {
+      return resource.data;
+    }
+    function isTechnicalStage(s) {
+      return s == 'matching' || s == 'sample' || s == 'report';
+    }
+    function canViewTicket() {
+      return isAdminLike() || isAuditor()
+        || (hasRole('technician') && isTechnicalStage(ticket().status))
+        || (hasRole('requester') && ticket().createdBy == request.auth.uid);
+    }
+
+    match /tickets/{ticketId} {
+      allow read: if isActive() && canViewTicket();
+
+      // Toda escritura del documento ticket pasa por Cloud Functions.
+      allow create, update, delete: if false;
+
+      // ── comments (subcolección) ──────────────────────────
+      // Lectura: cualquiera que pueda ver el ticket.
+      // Creación: roles que pueden comentar y que sean el autor.
+      match /comments/{commentId} {
+        function parent() {
+          return get(/databases/$(database)/documents/tickets/$(ticketId)).data;
+        }
+        function canSeeParent() {
+          return isAdminLike() || isAuditor()
+            || (hasRole('technician') && isTechnicalStage(parent().status))
+            || (hasRole('requester') && parent().createdBy == request.auth.uid);
+        }
+        function canCommentParent() {
+          return isAdminLike()
+            || (hasRole('technician') && isTechnicalStage(parent().status))
+            || (hasRole('requester') && parent().createdBy == request.auth.uid);
+        }
+
+        allow read: if isActive() && canSeeParent();
+        allow create: if isActive() && canCommentParent()
+          && request.resource.data.authorUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 5000;
+        // Los comentarios son inmutables desde cliente.
+        allow update, delete: if false;
+      }
+
+      // ── history (subcolección) ───────────────────────────
+      // Sólo lectura para quien pueda ver el ticket o el auditor.
+      // Escritura: backend exclusivamente.
+      match /history/{eventId} {
+        function parentH() {
+          return get(/databases/$(database)/documents/tickets/$(ticketId)).data;
+        }
+        allow read: if isActive() && (
+          isAdminLike() || isAuditor()
+          || (hasRole('technician') && isTechnicalStage(parentH().status))
+          || (hasRole('requester') && parentH().createdBy == request.auth.uid)
+        );
+        allow write: if false;
+      }
+    }
+
+    // ── notifications ──────────────────────────────────────
+    // Lectura: las propias (por uid) o las dirigidas a mi rol (técnicos).
+    // El usuario sólo puede marcar 'read'. Creación: backend.
+    match /notifications/{notifId} {
+      allow read: if isActive() && (
+        resource.data.recipientUid == request.auth.uid ||
+        resource.data.recipientRole == role()
+      );
+      allow update: if isActive()
+        && (resource.data.recipientUid == request.auth.uid
+            || resource.data.recipientRole == role())
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['read']);
+      allow create, delete: if false;
+    }
+
+    // ── slaSettings ────────────────────────────────────────
+    match /slaSettings/{docId} {
+      allow read: if isActive();
+      allow write: if isSuperAdmin(); // sólo SuperAdmin configura SLA
+    }
+
+    // ── businessCalendar ───────────────────────────────────
+    match /businessCalendar/{docId} {
+      allow read: if isActive();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── notificationSettings (webhook Google Chat + toggles) ──
+    match /notificationSettings/{docId} {
+      allow read: if isActive();
+      allow write: if isSuperAdmin();
+    }
+
+    // ── chatNotificationLogs ───────────────────────────────
+    match /chatNotificationLogs/{logId} {
+      allow read: if isAdminLike() || isSuperAdmin();
+      allow write: if false; // sólo backend
+    }
+
+    // ── counters (contador de folios) ──────────────────────
+    match /counters/{docId} {
+      allow read: if isActive();
+      allow write: if false; // sólo backend (transacción)
+    }
+
+    // Cualquier otra ruta: denegada.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

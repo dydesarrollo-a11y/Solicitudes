@@ -1,0 +1,67 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────
+// Reglas de Storage — Adjuntos de tickets.
+// Ruta: tickets/{ticketId}/{fileName}
+//
+// - Sólo usuarios activos del dominio.
+// - Lectura: quien pueda ver el ticket (se valida el doc en Firestore).
+// - Subida: roles que pueden comentar/adjuntar en ese ticket.
+// - Límite de tamaño y validación básica de contenido.
+// ─────────────────────────────────────────────────────────────
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function emailOk() {
+      return isSignedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email.matches('.*@blendergroup[.]com$');
+    }
+    function role() { return request.auth.token.role; }
+    function status() { return request.auth.token.status; }
+    function isActive() { return emailOk() && status() == 'active'; }
+    function isAdminLike() {
+      return isActive() && (role() == 'admin' || role() == 'superadmin');
+    }
+    function isAuditor() { return isActive() && role() == 'auditor'; }
+
+    function ticketDoc(ticketId) {
+      return firestore.get(/databases/(default)/documents/tickets/$(ticketId)).data;
+    }
+    function isTechnicalStage(s) {
+      return s == 'matching' || s == 'sample' || s == 'report';
+    }
+    function canView(ticketId) {
+      let t = ticketDoc(ticketId);
+      return isAdminLike() || isAuditor()
+        || (isActive() && role() == 'technician' && isTechnicalStage(t.status))
+        || (isActive() && role() == 'requester' && t.createdBy == request.auth.uid);
+    }
+    function canUpload(ticketId) {
+      let t = ticketDoc(ticketId);
+      return isAdminLike()
+        || (isActive() && role() == 'technician' && isTechnicalStage(t.status))
+        || (isActive() && role() == 'requester' && t.createdBy == request.auth.uid);
+    }
+
+    match /tickets/{ticketId}/{fileName} {
+      allow read: if isActive() && canView(ticketId);
+
+      allow write: if isActive()
+        && canUpload(ticketId)
+        && request.resource.size < 25 * 1024 * 1024 // 25 MB máx
+        && request.resource.contentType.matches(
+             'image/.*|application/pdf|application/vnd.*|text/.*|application/zip'
+           );
+
+      allow delete: if isAdminLike();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
