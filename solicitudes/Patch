@@ -1,0 +1,249 @@
+From b0a1d910bd875a1f174f9519146ff5da79c1ce8e Mon Sep 17 00:00:00 2001
+From: Solicitudes Bot <dydesarrollo@blendergroup.com>
+Date: Thu, 3 Sep 2026 18:58:15 +0000
+Subject: [PATCH] Aceptar dominios @blendergroup.com y @blendershop.com
+
+---
+ solicitudes/firestore.rules                    |  2 +-
+ solicitudes/functions/src/admin.ts             |  2 +-
+ solicitudes/functions/src/authz.ts             |  6 +++---
+ solicitudes/functions/src/triggers.ts          |  4 ++--
+ solicitudes/functions/src/users.ts             |  6 +++---
+ solicitudes/src/app/login/page.tsx             |  9 +++++++--
+ .../src/components/ticket/CommentSection.tsx   |  6 +++---
+ solicitudes/src/lib/business/constants.ts      | 13 +++++++++++--
+ solicitudes/src/lib/firebase/auth.ts           | 18 ++++++++++++------
+ solicitudes/storage.rules                      |  2 +-
+ 10 files changed, 44 insertions(+), 24 deletions(-)
+
+diff --git a/solicitudes/firestore.rules b/solicitudes/firestore.rules
+index c395dc0..8527cbe 100644
+--- a/solicitudes/firestore.rules
++++ b/solicitudes/firestore.rules
+@@ -21,7 +21,7 @@ service cloud.firestore {
+     function emailOk() {
+       return isSignedIn()
+         && request.auth.token.email != null
+-        && request.auth.token.email.matches('.*@blendergroup[.]com$');
++        && request.auth.token.email.matches('.*@(blendergroup|blendershop)[.]com$');
+     }
+     function role() {
+       return request.auth.token.role;
+diff --git a/solicitudes/functions/src/admin.ts b/solicitudes/functions/src/admin.ts
+index 32d37fe..a47a0a3 100644
+--- a/solicitudes/functions/src/admin.ts
++++ b/solicitudes/functions/src/admin.ts
+@@ -10,7 +10,7 @@ export const db = getFirestore();
+ export const auth = getAuth();
+ export { FieldValue };
+ 
+-export const ALLOWED_DOMAIN = "blendergroup.com";
++export const ALLOWED_DOMAINS = ["blendergroup.com", "blendershop.com"];
+ export const SEED_SUPERADMINS = [
+   "amartinez@blendergroup.com",
+   "dydesarrollo@blendergroup.com"
+diff --git a/solicitudes/functions/src/authz.ts b/solicitudes/functions/src/authz.ts
+index ee5f70f..e64f69f 100644
+--- a/solicitudes/functions/src/authz.ts
++++ b/solicitudes/functions/src/authz.ts
+@@ -1,6 +1,6 @@
+ // Utilidades de autorización para Cloud Functions callable.
+ import { HttpsError, CallableRequest } from "firebase-functions/v2/https";
+-import { db } from "./admin";
++import { db, ALLOWED_DOMAINS } from "./admin";
+ import {
+   DEFAULT_CALENDAR,
+   DEFAULT_SLA
+@@ -27,10 +27,10 @@ export function requireCaller(req: CallableRequest): Caller {
+     throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+   }
+   const email = (auth.token.email as string | undefined) ?? "";
+-  if (!email.endsWith("@blendergroup.com")) {
++  if (!ALLOWED_DOMAINS.some((domain) => email.endsWith(`@${domain}`))) {
+     throw new HttpsError(
+       "permission-denied",
+-      "Solo cuentas @blendergroup.com pueden usar el sistema."
++      `Solo cuentas ${ALLOWED_DOMAINS.map((d) => `@${d}`).join(" o ")} pueden usar el sistema.`
+     );
+   }
+   const role = (auth.token.role as Role | undefined) ?? null;
+diff --git a/solicitudes/functions/src/triggers.ts b/solicitudes/functions/src/triggers.ts
+index 831b5af..6932045 100644
+--- a/solicitudes/functions/src/triggers.ts
++++ b/solicitudes/functions/src/triggers.ts
+@@ -9,9 +9,9 @@ import {
+   ticketUrl
+ } from "./notify";
+ 
+-/** Extrae menciones tipo @usuario@blendergroup.com o @usuario del texto. */
++/** Extrae menciones tipo @usuario@blendergroup.com, @usuario@blendershop.com o @usuario del texto. */
+ function extractMentions(text: string): string[] {
+-  const re = /@([a-zA-Z0-9._-]+@blendergroup\.com)/g;
++  const re = /@([a-zA-Z0-9._-]+@(?:blendergroup|blendershop)\.com)/g;
+   const found = new Set<string>();
+   let m: RegExpExecArray | null;
+   while ((m = re.exec(text)) !== null) {
+diff --git a/solicitudes/functions/src/users.ts b/solicitudes/functions/src/users.ts
+index 45d9ad3..ede2aae 100644
+--- a/solicitudes/functions/src/users.ts
++++ b/solicitudes/functions/src/users.ts
+@@ -1,7 +1,7 @@
+ // Gestión de usuarios: alta automática, seed de SuperAdmins y asignación de roles.
+ import * as functionsV1 from "firebase-functions/v1";
+ import { onCall, HttpsError } from "firebase-functions/v2/https";
+-import { auth, db, ALLOWED_DOMAIN, SEED_SUPERADMINS } from "./admin";
++import { auth, db, ALLOWED_DOMAINS, SEED_SUPERADMINS } from "./admin";
+ import { requireRole } from "./authz";
+ import { createNotification } from "./notify";
+ import type { Role, UserStatus } from "./types";
+@@ -21,13 +21,13 @@ async function syncClaims(uid: string, role: Role | null, status: UserStatus) {
+ 
+ /**
+  * Trigger al crear un usuario en Firebase Auth.
+- * - Solo dominio @blendergroup.com.
++ * - Solo dominios permitidos (ver ALLOWED_DOMAINS en admin.ts).
+  * - Los correos semilla se vuelven SuperAdmin activos.
+  * - El resto queda 'pending' hasta que un SuperAdmin asigne rol.
+  */
+ export const onUserCreate = functionsV1.auth.user().onCreate(async (user) => {
+   const email = (user.email ?? "").toLowerCase();
+-  if (!email.endsWith(`@${ALLOWED_DOMAIN}`)) {
++  if (!ALLOWED_DOMAINS.some((domain) => email.endsWith(`@${domain}`))) {
+     // Fuera de dominio: no se le da acceso (sin doc, sin claims).
+     return;
+   }
+diff --git a/solicitudes/src/app/login/page.tsx b/solicitudes/src/app/login/page.tsx
+index e93cd0c..06534b8 100644
+--- a/solicitudes/src/app/login/page.tsx
++++ b/solicitudes/src/app/login/page.tsx
+@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
+ import { useRouter } from "next/navigation";
+ import { useAuth } from "@/hooks/useAuth";
+ import { signInWithGoogle } from "@/lib/firebase/auth";
++import { ALLOWED_DOMAINS } from "@/lib/business/constants";
+ 
+ export default function LoginPage() {
+   const { firebaseUser, loading } = useAuth();
+@@ -62,8 +63,12 @@ export default function LoginPage() {
+         )}
+ 
+         <p className="mt-6 text-center text-xs text-[var(--muted)]">
+-          Solo cuentas <strong>@blendergroup.com</strong>. Los usuarios nuevos
+-          quedan pendientes de autorización por un SuperAdmin.
++          Solo cuentas{" "}
++          <strong>
++            {ALLOWED_DOMAINS.map((d) => `@${d}`).join(" o ")}
++          </strong>
++          . Los usuarios nuevos quedan pendientes de autorización por un
++          SuperAdmin.
+         </p>
+       </div>
+     </div>
+diff --git a/solicitudes/src/components/ticket/CommentSection.tsx b/solicitudes/src/components/ticket/CommentSection.tsx
+index 4525c34..b04fa9a 100644
+--- a/solicitudes/src/components/ticket/CommentSection.tsx
++++ b/solicitudes/src/components/ticket/CommentSection.tsx
+@@ -12,7 +12,7 @@ import { canComment } from "@/lib/business/permissions";
+ import { AttachmentList } from "./AttachmentList";
+ 
+ function extractMentions(text: string): string[] {
+-  const re = /@([a-zA-Z0-9._-]+@blendergroup\.com)/g;
++  const re = /@([a-zA-Z0-9._-]+@(?:blendergroup|blendershop)\.com)/g;
+   const out = new Set<string>();
+   let m: RegExpExecArray | null;
+   while ((m = re.exec(text)) !== null) if (m[1]) out.add(m[1].toLowerCase());
+@@ -101,7 +101,7 @@ export function CommentSection({ ticket }: { ticket: Ticket }) {
+         <div className="rounded-lg border border-[var(--border)] p-3">
+           <textarea
+             className="input min-h-[70px]"
+-            placeholder="Escribe un comentario… usa @correo@blendergroup.com para mencionar"
++            placeholder="Escribe un comentario… usa @correo@dominio.com para mencionar"
+             value={text}
+             onChange={(e) => setText(e.target.value)}
+             list="mention-emails"
+@@ -133,7 +133,7 @@ export function CommentSection({ ticket }: { ticket: Ticket }) {
+ }
+ 
+ function highlightMentions(text: string) {
+-  const parts = text.split(/(@[a-zA-Z0-9._-]+@blendergroup\.com)/g);
++  const parts = text.split(/(@[a-zA-Z0-9._-]+@(?:blendergroup|blendershop)\.com)/g);
+   return parts.map((p, i) =>
+     p.startsWith("@") ? (
+       <span key={i} className="font-semibold text-amber-600 dark:text-amber-400">
+diff --git a/solicitudes/src/lib/business/constants.ts b/solicitudes/src/lib/business/constants.ts
+index 45166f2..f24a48d 100644
+--- a/solicitudes/src/lib/business/constants.ts
++++ b/solicitudes/src/lib/business/constants.ts
+@@ -6,8 +6,17 @@ import type {
+   TicketStatus
+ } from "@/lib/types";
+ 
+-export const ALLOWED_DOMAIN =
+-  process.env.NEXT_PUBLIC_ALLOWED_DOMAIN ?? "blendergroup.com";
++export const ALLOWED_DOMAINS = (
++  process.env.NEXT_PUBLIC_ALLOWED_DOMAINS ??
++  process.env.NEXT_PUBLIC_ALLOWED_DOMAIN ??
++  "blendergroup.com,blendershop.com"
++)
++  .split(",")
++  .map((d) => d.trim())
++  .filter(Boolean);
++
++/** Compatibilidad: primer dominio de la lista, usado sólo para mostrar texto. */
++export const ALLOWED_DOMAIN = ALLOWED_DOMAINS[0];
+ 
+ /** Correos que deben sembrarse como SuperAdmin (también usado por la function de seed). */
+ export const SEED_SUPERADMINS = [
+diff --git a/solicitudes/src/lib/firebase/auth.ts b/solicitudes/src/lib/firebase/auth.ts
+index 518a6eb..f30f61f 100644
+--- a/solicitudes/src/lib/firebase/auth.ts
++++ b/solicitudes/src/lib/firebase/auth.ts
+@@ -7,21 +7,27 @@ import {
+   browserLocalPersistence
+ } from "firebase/auth";
+ import { auth } from "./config";
+-import { ALLOWED_DOMAIN } from "@/lib/business/constants";
++import { ALLOWED_DOMAINS } from "@/lib/business/constants";
+ 
+ const provider = new GoogleAuthProvider();
+-// Restringe el selector de cuentas al dominio corporativo (no es seguridad real,
+-// la validación dura está en backend/rules, pero mejora la UX).
+-provider.setCustomParameters({ hd: ALLOWED_DOMAIN, prompt: "select_account" });
++// Restringe el selector de cuentas a cuentas de Google Workspace (no es seguridad
++// real, la validación dura está en backend/rules, pero mejora la UX). "hd" sólo
++// admite un valor, y como aceptamos más de un dominio usamos "*" para permitir
++// cualquier cuenta de Workspace y luego filtramos por dominio abajo.
++provider.setCustomParameters({ hd: "*", prompt: "select_account" });
++
++function isAllowedEmail(email: string): boolean {
++  return ALLOWED_DOMAINS.some((domain) => email.endsWith(`@${domain}`));
++}
+ 
+ export async function signInWithGoogle(): Promise<void> {
+   await setPersistence(auth, browserLocalPersistence);
+   const cred = await signInWithPopup(auth, provider);
+   const email = cred.user.email ?? "";
+-  if (!email.endsWith(`@${ALLOWED_DOMAIN}`)) {
++  if (!isAllowedEmail(email)) {
+     await fbSignOut(auth);
+     throw new Error(
+-      `Solo se permiten cuentas @${ALLOWED_DOMAIN}. Iniciaste con ${email}.`
++      `Solo se permiten cuentas ${ALLOWED_DOMAINS.map((d) => `@${d}`).join(" o ")}. Iniciaste con ${email}.`
+     );
+   }
+ }
+diff --git a/solicitudes/storage.rules b/solicitudes/storage.rules
+index d8f162f..b3c15f6 100644
+--- a/solicitudes/storage.rules
++++ b/solicitudes/storage.rules
+@@ -18,7 +18,7 @@ service firebase.storage {
+     function emailOk() {
+       return isSignedIn()
+         && request.auth.token.email != null
+-        && request.auth.token.email.matches('.*@blendergroup[.]com$');
++        && request.auth.token.email.matches('.*@(blendergroup|blendershop)[.]com$');
+     }
+     function role() { return request.auth.token.role; }
+     function status() { return request.auth.token.status; }
+-- 
+2.43.0
