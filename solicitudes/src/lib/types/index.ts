@@ -140,7 +140,8 @@ export type HistoryEventType =
   | "delivered"
   | "delivery_confirmed"
   | "closed"
-  | "force_closed";
+  | "force_closed"
+  | "edited";
 
 export interface HistoryEvent {
   id: string;
@@ -167,7 +168,8 @@ export type NotificationType =
   | "sla_late"
   | "delivery_late"
   | "new_user_request"
-  | "notification_error";
+  | "notification_error"
+  | "ticket_edited";
 
 export interface AppNotification {
   id: string;
