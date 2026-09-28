@@ -2,7 +2,7 @@
  * Punto de entrada de Cloud Functions — App "Solicitudes".
  *
  * Callable (httpsCallable desde el cliente):
- *   - createTicket, setCommitmentDate, moveTicket, confirmDelivery, forceClose
+ *   - createTicket, setCommitmentDate, updateTicket, moveTicket, confirmDelivery, forceClose
  *   - assignRole, setUserStatus
  *
  * Triggers:
@@ -20,6 +20,7 @@ export {
   createTicket,
   addAttachments,
   setCommitmentDate,
+  updateTicket,
   moveTicket,
   confirmDelivery,
   forceClose

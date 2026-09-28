@@ -213,6 +213,100 @@ export const setCommitmentDate = onCall(async (req) => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// 2b) Editar ticket (Solicitante dueño o Admin/SuperAdmin) — SOLO en "waiting"
+// ─────────────────────────────────────────────────────────────
+export const updateTicket = onCall(async (req) => {
+  const caller = requireActive(req);
+  const d = (req.data ?? {}) as Record<string, unknown>;
+  const ticketId = String(d.ticketId ?? "");
+  if (!ticketId) throw new HttpsError("invalid-argument", "ticketId requerido.");
+
+  const ref = db.collection("tickets").doc(ticketId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Ticket no encontrado.");
+  const t = snap.data()!;
+
+  const isOwner = caller.role === "requester" && t.createdBy === caller.uid;
+  const isStaff = ["admin", "superadmin"].includes(caller.role!);
+  if (!isOwner && !isStaff) {
+    throw new HttpsError("permission-denied", "No puedes editar este ticket.");
+  }
+  if (t.status !== "waiting") {
+    throw new HttpsError(
+      "failed-precondition",
+      "Solo se puede editar la solicitud mientras está En espera."
+    );
+  }
+
+  const productType = String(d.productType ?? "").trim();
+  const specification = String(d.specification ?? "").trim();
+  const capacityKg = Number(d.capacityKg);
+  const initialComments = String(d.initialComments ?? "").trim();
+  const approxProjectAmount = Number(d.approxProjectAmount);
+  const clientOrProject = String(d.clientOrProject ?? "").trim();
+  const priority = d.priority as Priority;
+
+  if (
+    !productType ||
+    !specification ||
+    !Number.isFinite(capacityKg) ||
+    capacityKg <= 0 ||
+    !initialComments ||
+    !Number.isFinite(approxProjectAmount) ||
+    approxProjectAmount < 0 ||
+    !clientOrProject ||
+    !VALID_PRIORITIES.includes(priority)
+  ) {
+    throw new HttpsError("invalid-argument", "Faltan campos obligatorios o son inválidos.");
+  }
+
+  const before = {
+    productType: t.productType,
+    specification: t.specification,
+    capacityKg: t.capacityKg,
+    initialComments: t.initialComments,
+    approxProjectAmount: t.approxProjectAmount,
+    clientOrProject: t.clientOrProject,
+    priority: t.priority
+  };
+  const after = {
+    productType,
+    specification,
+    capacityKg,
+    initialComments,
+    approxProjectAmount,
+    clientOrProject,
+    priority
+  };
+
+  await ref.update({
+    ...after,
+    updatedAt: Date.now(),
+    updatedBy: caller.uid
+  });
+
+  await addHistory(ticketId, {
+    type: "edited",
+    actorUid: caller.uid,
+    actorName: caller.name,
+    message: "Solicitud editada mientras estaba En espera.",
+    before,
+    after
+  });
+
+  if (isOwner) {
+    await notifyRole("admin", {
+      type: "ticket_edited",
+      ticketId,
+      title: `Solicitud editada · ${ticketId}`,
+      body: `${caller.name} editó los datos del ticket.`
+    });
+  }
+
+  return { ok: true };
+});
+
+// ─────────────────────────────────────────────────────────────
 // 3) Mover ticket entre columnas (valida transición + rol)
 // ─────────────────────────────────────────────────────────────
 export const moveTicket = onCall(async (req) => {
