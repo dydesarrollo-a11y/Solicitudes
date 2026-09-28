@@ -26,6 +26,7 @@ import type {
   Attachment,
   BusinessCalendar,
   CreateTicketInput,
+  Priority,
   SlaSettings,
   TicketStatus,
   AppUser,
@@ -50,6 +51,19 @@ export const callSetCommitment = httpsCallable<
   { ticketId: string; commitmentDueAt: number },
   { ok: boolean }
 >(functions, "setCommitmentDate");
+export const callUpdateTicket = httpsCallable<
+  {
+    ticketId: string;
+    productType: string;
+    specification: string;
+    capacityKg: number;
+    initialComments: string;
+    approxProjectAmount: number;
+    clientOrProject: string;
+    priority: Priority;
+  },
+  { ok: boolean }
+>(functions, "updateTicket");
 export const callConfirmDelivery = httpsCallable<
   { ticketId: string },
   { ok: boolean }
