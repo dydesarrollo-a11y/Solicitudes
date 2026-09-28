@@ -14,7 +14,8 @@ const ICONS: Record<HistoryEventType, string> = {
   delivered: "📦",
   delivery_confirmed: "✅",
   closed: "🔒",
-  force_closed: "⛔"
+  force_closed: "⛔",
+  edited: "✏️"
 };
 
 function fmt(ts: number): string {

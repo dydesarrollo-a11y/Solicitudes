@@ -13,6 +13,7 @@ import {
   allowedTransitions,
   canAssignCommitment,
   canConfirmDelivery,
+  canEditTicket,
   canForceClose
 } from "@/lib/business/permissions";
 import { STATUS_LABEL } from "@/lib/business/constants";
@@ -25,6 +26,7 @@ import { Spinner, ErrorState } from "@/components/ui/States";
 import { CommentSection } from "./CommentSection";
 import { HistoryList } from "./HistoryList";
 import { AttachmentList } from "./AttachmentList";
+import { EditTicketModal } from "./EditTicketModal";
 import { Timer } from "@/components/kanban/Timer";
 
 function fmtDateTime(ts: number | null): string {
@@ -47,6 +49,7 @@ export function TicketDetail({ ticketId }: { ticketId: string }) {
   const [tab, setTab] = useState<"details" | "comments" | "history">("details");
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
 
   if (loading) return <Spinner label="Cargando ticket…" />;
   if (error) return <ErrorState message={error} />;
@@ -95,6 +98,16 @@ export function TicketDetail({ ticketId }: { ticketId: string }) {
 
         {/* Acciones */}
         <div className="mt-4 flex flex-wrap gap-2 border-t border-[var(--border)] pt-4">
+          {canEditTicket(role, uid, ticket) && (
+            <button
+              className="btn-ghost"
+              disabled={!!busy}
+              onClick={() => setEditing(true)}
+            >
+              Editar solicitud
+            </button>
+          )}
+
           {transitions.map((to) => (
             <button
               key={to}
@@ -188,6 +201,14 @@ export function TicketDetail({ ticketId }: { ticketId: string }) {
         {tab === "comments" && <CommentSection ticket={ticket} />}
         {tab === "history" && <HistoryList ticketId={ticketId} />}
       </div>
+
+      {editing && (
+        <EditTicketModal
+          ticket={ticket}
+          onClose={() => setEditing(false)}
+          onSaved={() => setEditing(false)}
+        />
+      )}
     </div>
   );
 }
