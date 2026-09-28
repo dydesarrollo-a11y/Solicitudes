@@ -70,8 +70,18 @@ export function canAssignCommitment(role: Role | null): boolean {
   return isAdminLike(role);
 }
 
-export function canEditTicket(role: Role | null): boolean {
-  return isAdminLike(role);
+/**
+ * Puede editar los datos del ticket SOLO mientras está "En espera":
+ * el Solicitante dueño, o Admin/SuperAdmin.
+ */
+export function canEditTicket(
+  role: Role | null,
+  uid: string,
+  ticket: Pick<Ticket, "createdBy" | "status">
+): boolean {
+  if (ticket.status !== "waiting") return false;
+  if (isAdminLike(role)) return true;
+  return role === "requester" && ticket.createdBy === uid;
 }
 
 /** Transiciones de columna válidas para un rol desde el estado actual. */
